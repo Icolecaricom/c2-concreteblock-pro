@@ -1,0 +1,24 @@
+{
+  "name": "C2 ConcreteBlock Pro",
+  "short_name": "C2 ConcreteBlock",
+  "description": "Premium GNBS certified concrete blocks in Guyana. Building stronger foundations with strength, durability & affordability.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1E3A5F",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/c2-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "construction", "shopping"],
+  "lang": "en",
+  "dir": "ltr",
+  "scope": "/",
+  "prefer_related_applications": false,
+  "related_applications": []
+}

@@ -1,0 +1,18 @@
+# Security Policy for C2 ConcreteBlock Pro
+# https://c2concreteblockpro.com
+
+# Contact: Preferred contact method for security issues
+Contact: security@c2concreteblockpro.com
+Contact: tel:+592-XXX-XXXX
+
+# Expires: Date when this file should be considered stale
+Expires: 2026-01-01T00:00:00.000Z
+
+# Preferred-Languages: Languages for security reports
+Preferred-Languages: en
+
+# Canonical: Full URL for this security.txt file
+Canonical: https://c2concreteblockpro.com/.well-known/security.txt
+
+# Policy: Link to security policy page
+Policy: https://c2concreteblockpro.com/#privacy
