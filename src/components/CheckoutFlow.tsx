@@ -36,9 +36,11 @@ import {
   ChevronRight,
   Lock,
   Shield,
+  Wallet,
 } from 'lucide-react';
 import { useCartStore } from '@/store/cart';
 import { CouponInput } from '@/components/PromotionalBanner';
+import { PaymentForm, PaymentMethodSelector } from '@/components/PaymentForm';
 import { toast } from 'sonner';
 
 interface CheckoutProps {
@@ -508,73 +510,90 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
 
             {/* Step 3: Payment */}
             {currentStep === 'payment' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <CreditCard className="h-5 w-5" />
-                    Payment Method
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  {/* Payment Options */}
-                  <div className="space-y-3">
-                    <div
-                      className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
-                        formData.paymentMethod === 'card'
-                          ? 'border-[#F97316] bg-orange-50'
-                          : 'border-gray-200 hover:border-gray-300'
-                      }`}
-                      onClick={() => setFormData((prev) => ({ ...prev, paymentMethod: 'card' }))}
-                    >
-                      <div className="flex items-center gap-3">
-                        <CreditCard className="h-6 w-6 text-[#F97316]" />
-                        <div className="flex-1">
-                          <p className="font-semibold">Card Payment</p>
-                          <p className="text-sm text-gray-500">Pay securely with credit/debit card</p>
-                        </div>
-                        <Badge className="bg-green-500">Instant</Badge>
-                      </div>
-                    </div>
+              <div className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <CreditCard className="h-5 w-5 text-[#F97316]" />
+                      Choose Payment Method
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <PaymentMethodSelector
+                      selectedMethod={formData.paymentMethod}
+                      onMethodChange={(method) => setFormData((prev) => ({ ...prev, paymentMethod: method }))}
+                    />
+                  </CardContent>
+                </Card>
 
-                    <div
-                      className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
-                        formData.paymentMethod === 'bank_transfer'
-                          ? 'border-[#F97316] bg-orange-50'
-                          : 'border-gray-200 hover:border-gray-300'
-                      }`}
-                      onClick={() => setFormData((prev) => ({ ...prev, paymentMethod: 'bank_transfer' }))}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Building className="h-6 w-6 text-[#F97316]" />
-                        <div className="flex-1">
-                          <p className="font-semibold">Bank Transfer</p>
-                          <p className="text-sm text-gray-500">Transfer directly to our bank account</p>
-                        </div>
-                        <Badge variant="outline">Manual</Badge>
-                      </div>
-                    </div>
+                {/* Card Payment Form */}
+                {formData.paymentMethod === 'card' && (
+                  <PaymentForm
+                    amount={formData.isPartialPayment ? depositAmount : finalTotal}
+                    customerEmail={formData.email}
+                    customerName={`${formData.firstName} ${formData.lastName}`}
+                    customerPhone={formData.phone}
+                    isPartialPayment={formData.isPartialPayment}
+                    totalAmount={finalTotal}
+                    onSuccess={(paymentIntentId) => {
+                      setPaymentClientSecret(paymentIntentId);
+                      setCurrentStep('confirmation');
+                      clearCart();
+                      toast.success('Payment successful! Order confirmed.');
+                    }}
+                    onError={(error) => {
+                      toast.error(error);
+                    }}
+                  />
+                )}
 
-                    <div
-                      className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
-                        formData.paymentMethod === 'cash_on_delivery'
-                          ? 'border-[#F97316] bg-orange-50'
-                          : 'border-gray-200 hover:border-gray-300'
-                      }`}
-                      onClick={() => setFormData((prev) => ({ ...prev, paymentMethod: 'cash_on_delivery' }))}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Shield className="h-6 w-6 text-[#F97316]" />
-                        <div className="flex-1">
-                          <p className="font-semibold">Cash on Delivery / Pickup</p>
-                          <p className="text-sm text-gray-500">Pay when you receive your order</p>
+                {/* Bank Transfer Info */}
+                {formData.paymentMethod === 'bank_transfer' && (
+                  <Card className="border-blue-200 bg-blue-50">
+                    <CardContent className="pt-6">
+                      <div className="flex items-start gap-4">
+                        <Building className="h-8 w-8 text-blue-600" />
+                        <div>
+                          <h4 className="font-semibold text-[#1E3A5F] mb-2">Bank Transfer Details</h4>
+                          <div className="text-sm space-y-1 text-gray-600">
+                            <p><strong>Bank:</strong> Republic Bank Guyana</p>
+                            <p><strong>Account Name:</strong> C2 ConcreteBlock Pro</p>
+                            <p><strong>Account Number:</strong> XXX-XXXX-XXXX</p>
+                            <p><strong>Routing Number:</strong> XXXXXXXX</p>
+                          </div>
+                          <p className="text-xs text-blue-600 mt-3">
+                            Please include your order number in the transfer reference. 
+                            Your order will be processed once payment is confirmed.
+                          </p>
                         </div>
-                        <Badge variant="outline">On Delivery</Badge>
                       </div>
-                    </div>
-                  </div>
+                    </CardContent>
+                  </Card>
+                )}
 
-                  {/* Partial Payment Option */}
-                  <div className="bg-gray-50 rounded-lg p-4">
+                {/* Cash on Delivery Info */}
+                {formData.paymentMethod === 'cash_on_delivery' && (
+                  <Card className="border-green-200 bg-green-50">
+                    <CardContent className="pt-6">
+                      <div className="flex items-start gap-4">
+                        <Wallet className="h-8 w-8 text-green-600" />
+                        <div>
+                          <h4 className="font-semibold text-[#1E3A5F] mb-2">Cash on Delivery</h4>
+                          <p className="text-sm text-gray-600">
+                            Pay with cash when your order is delivered or when you pick up from our facility.
+                          </p>
+                          <p className="text-xs text-green-600 mt-3">
+                            Please have the exact amount ready. Our delivery personnel do not carry change.
+                          </p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Partial Payment Option */}
+                <Card>
+                  <CardContent className="pt-6">
                     <div className="flex items-center gap-3 mb-3">
                       <input
                         type="checkbox"
@@ -587,14 +606,14 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
                             depositAmount: e.target.checked ? minDeposit : 0,
                           }))
                         }
-                        className="h-4 w-4"
+                        className="h-4 w-4 accent-[#F97316]"
                       />
-                      <Label htmlFor="partialPayment" className="font-medium">
-                        Pay Deposit (50% minimum)
+                      <Label htmlFor="partialPayment" className="font-medium cursor-pointer">
+                        Pay Deposit (50% minimum) - Balance due on delivery
                       </Label>
                     </div>
                     {formData.isPartialPayment && (
-                      <div>
+                      <div className="mt-3 pl-7">
                         <Label>Deposit Amount (GYD)</Label>
                         <Input
                           type="number"
@@ -607,32 +626,29 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
                           }
                           min={minDeposit}
                           max={finalTotal}
+                          className="mt-1"
                         />
                         <p className="text-sm text-gray-500 mt-1">
                           Minimum deposit: ${minDeposit.toLocaleString()} GYD
                         </p>
                       </div>
                     )}
-                  </div>
+                  </CardContent>
+                </Card>
 
-                  {/* Coupon Code */}
-                  <div>
-                    <Label>Have a coupon code?</Label>
+                {/* Coupon Code */}
+                <Card>
+                  <CardContent className="pt-6">
+                    <Label className="mb-2 block">Have a coupon code?</Label>
                     <CouponInput
                       onApply={(code, discountPercent) => {
                         setDiscount(Math.round(finalTotal * (discountPercent / 100)));
                         toast.success(`Coupon ${code} applied! ${discountPercent}% off`);
                       }}
                     />
-                  </div>
-
-                  {/* Security Badge */}
-                  <div className="flex items-center gap-2 text-sm text-gray-500">
-                    <Lock className="h-4 w-4" />
-                    <span>Secure payment powered by Stripe</span>
-                  </div>
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+              </div>
             )}
 
             {/* Step 4: Confirmation */}
@@ -697,23 +713,27 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
                 </Button>
 
                 {currentStep === 'payment' ? (
-                  <Button
-                    onClick={handleSubmitOrder}
-                    disabled={isLoading}
-                    className="bg-[#F97316] hover:bg-orange-600 flex items-center gap-2"
-                  >
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Processing...
-                      </>
-                    ) : (
-                      <>
-                        <Lock className="h-4 w-4" />
-                        Place Order - ${formData.isPartialPayment ? depositAmount.toLocaleString() : finalTotal.toLocaleString()} GYD
-                      </>
-                    )}
-                  </Button>
+                  // Only show Place Order button for non-card payments
+                  // Card payments have their own Pay button in PaymentForm
+                  formData.paymentMethod !== 'card' && (
+                    <Button
+                      onClick={handleSubmitOrder}
+                      disabled={isLoading}
+                      className="bg-[#F97316] hover:bg-orange-600 flex items-center gap-2"
+                    >
+                      {isLoading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Processing...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle className="h-4 w-4" />
+                          Place Order - ${formData.isPartialPayment ? depositAmount.toLocaleString() : finalTotal.toLocaleString()} GYD
+                        </>
+                      )}
+                    </Button>
+                  )
                 ) : (
                   <Button
                     onClick={handleNext}
