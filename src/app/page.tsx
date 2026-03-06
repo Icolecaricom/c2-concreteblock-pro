@@ -1,5 +1,6 @@
 'use client';
 
+import { Suspense } from 'react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
 import { HeroSection } from '@/components/sections/HeroSection';
@@ -22,8 +23,10 @@ import { SocialShare, FloatingShareButton } from '@/components/SocialShare';
 export default function Home() {
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Google Analytics */}
-      <GoogleAnalytics />
+      {/* Google Analytics - wrapped in Suspense for useSearchParams */}
+      <Suspense fallback={null}>
+        <GoogleAnalytics />
+      </Suspense>
 
       {/* Promotional Banner */}
       <PromotionalBanner />
