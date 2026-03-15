@@ -37,10 +37,11 @@ import {
   Lock,
   Shield,
   Wallet,
+  ExternalLink,
 } from 'lucide-react';
 import { useCartStore } from '@/store/cart';
 import { CouponInput } from '@/components/PromotionalBanner';
-import { PaymentForm, PaymentMethodSelector } from '@/components/PaymentForm';
+import { StripePaymentForm, PaymentMethodSelector } from '@/components/StripePaymentForm';
 import { toast } from 'sonner';
 
 interface CheckoutProps {
@@ -66,8 +67,8 @@ interface CheckoutFormData {
   deliveryMethod: 'delivery' | 'pickup';
 
   // Payment
-  paymentMethod: 'card' | 'bank_transfer' | 'cash_on_delivery';
-  depositAmount: number; // For partial payments
+  paymentMethod: 'card' | 'stripe_checkout' | 'bank_transfer' | 'cash_on_delivery';
+  depositAmount: number;
   isPartialPayment: boolean;
 }
 
@@ -80,6 +81,7 @@ const REGIONS = [
 const PRICING = {
   deliveryFee: 0, // Free within 10 miles
   deliveryFeeOutsideZone: 5000, // GYD for outside free zone
+  gydToUsdRate: 210, // Conversion rate
 };
 
 export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
@@ -89,6 +91,7 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [paymentClientSecret, setPaymentClientSecret] = useState<string | null>(null);
   const [discount, setDiscount] = useState(0);
+  const [checkoutSessionUrl, setCheckoutSessionUrl] = useState<string | null>(null);
 
   const [formData, setFormData] = useState<CheckoutFormData>({
     firstName: '',
@@ -110,10 +113,12 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
   const subtotal = totalPrice.min;
   const estimatedTotal = subtotal + (formData.deliveryMethod === 'delivery' && formData.region !== 'region-3' ? PRICING.deliveryFeeOutsideZone : 0);
   const finalTotal = estimatedTotal - discount;
+  const finalTotalUSD = Math.round(finalTotal / PRICING.gydToUsdRate * 100) / 100;
 
   // Calculate deposit (50% minimum for partial payments)
   const minDeposit = Math.ceil(finalTotal * 0.5);
   const depositAmount = formData.isPartialPayment ? formData.depositAmount || minDeposit : finalTotal;
+  const depositAmountUSD = Math.round(depositAmount / PRICING.gydToUsdRate * 100) / 100;
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -141,87 +146,150 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
     else if (currentStep === 'payment') setCurrentStep('delivery');
   };
 
-  const handleSubmitOrder = async () => {
-    setIsLoading(true);
+  const createOrder = async () => {
+    const orderResponse = await fetch('/api/orders/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customerName: `${formData.firstName} ${formData.lastName}`,
+        customerEmail: formData.email,
+        customerPhone: formData.phone,
+        company: formData.company || null,
+        deliveryAddress: formData.deliveryMethod === 'delivery'
+          ? `${formData.address}, ${formData.city}, ${formData.region}`
+          : 'Pickup at facility',
+        deliveryMethod: formData.deliveryMethod,
+        deliveryInstructions: formData.deliveryInstructions || null,
+        paymentMethod: formData.paymentMethod,
+        isPartialPayment: formData.isPartialPayment,
+        depositAmount: formData.isPartialPayment ? depositAmount : finalTotal,
+        items: items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          unitPrice: item.priceMin,
+        })),
+        totalAmount: finalTotal,
+        notes: formData.isPartialPayment
+          ? `Partial payment: $${depositAmount} GYD. Remaining: $${finalTotal - depositAmount} GYD`
+          : '',
+      }),
+    });
 
+    const orderData = await orderResponse.json();
+
+    if (!orderData.success) {
+      throw new Error(orderData.error || 'Failed to create order');
+    }
+
+    setOrderId(orderData.order.id);
+    return orderData.order.id;
+  };
+
+  const handleStripeCheckout = async () => {
+    setIsLoading(true);
     try {
-      // Create order in database
-      const orderResponse = await fetch('/api/orders/create', {
+      const createdOrderId = await createOrder();
+
+      // Create Stripe Checkout session
+      const response = await fetch('/api/stripe/checkout-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          customerName: `${formData.firstName} ${formData.lastName}`,
-          customerEmail: formData.email,
-          customerPhone: formData.phone,
-          company: formData.company || null,
-          deliveryAddress: formData.deliveryMethod === 'delivery'
-            ? `${formData.address}, ${formData.city}, ${formData.region}`
-            : 'Pickup at facility',
-          deliveryMethod: formData.deliveryMethod,
-          deliveryInstructions: formData.deliveryInstructions || null,
-          paymentMethod: formData.paymentMethod,
-          isPartialPayment: formData.isPartialPayment,
-          depositAmount: formData.isPartialPayment ? depositAmount : finalTotal,
           items: items.map((item) => ({
-            productId: item.productId,
+            name: item.name,
+            description: `${item.name} - ${item.quantity} units`,
+            amount: Math.round((item.priceMin + item.priceMax) / 2),
             quantity: item.quantity,
-            unitPrice: item.priceMin,
           })),
-          totalAmount: finalTotal,
-          notes: formData.isPartialPayment
-            ? `Partial payment: $${depositAmount} GYD. Remaining: $${finalTotal - depositAmount} GYD`
-            : '',
+          customerEmail: formData.email,
+          customerName: `${formData.firstName} ${formData.lastName}`,
+          customerPhone: formData.phone,
+          orderId: createdOrderId,
+          amountGYD: finalTotal,
         }),
       });
 
-      const orderData = await orderResponse.json();
+      const data = await response.json();
 
-      if (!orderData.success) {
-        throw new Error(orderData.error || 'Failed to create order');
-      }
-
-      setOrderId(orderData.order.id);
-
-      // Handle different payment methods
-      if (formData.paymentMethod === 'card') {
-        // Create Stripe payment intent
-        const paymentResponse = await fetch('/api/stripe/payment-intent', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            amount: depositAmount,
-            description: `C2 ConcreteBlock Pro Order - ${orderData.order.id}`,
-            customerEmail: formData.email,
-            customerName: `${formData.firstName} ${formData.lastName}`,
-            customerPhone: formData.phone,
-            orderId: orderData.order.id,
-          }),
-        });
-
-        const paymentData = await paymentResponse.json();
-
-        if (paymentData.success) {
-          setPaymentClientSecret(paymentData.clientSecret);
-          // In production, you would redirect to Stripe Checkout
-          // For now, we'll show the confirmation
-          setCurrentStep('confirmation');
-          clearCart();
-        } else {
-          throw new Error(paymentData.error || 'Payment failed');
-        }
+      if (data.success && data.sessionUrl) {
+        setCheckoutSessionUrl(data.sessionUrl);
+        // Redirect to Stripe Checkout
+        window.location.href = data.sessionUrl;
       } else {
-        // Bank transfer or COD - just confirm
-        setCurrentStep('confirmation');
-        clearCart();
+        throw new Error(data.error || 'Failed to create checkout session');
       }
-
-      toast.success('Order submitted successfully!');
     } catch (error) {
-      console.error('Order submission error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to submit order');
+      console.error('Checkout error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to process checkout');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleCardPayment = async () => {
+    setIsLoading(true);
+    try {
+      const createdOrderId = await createOrder();
+
+      // Create payment intent for card payment
+      const paymentResponse = await fetch('/api/stripe/payment-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: depositAmount,
+          description: `C2 ConcreteBlock Pro Order - ${createdOrderId}`,
+          customerEmail: formData.email,
+          customerName: `${formData.firstName} ${formData.lastName}`,
+          customerPhone: formData.phone,
+          orderId: createdOrderId,
+        }),
+      });
+
+      const paymentData = await paymentResponse.json();
+
+      if (paymentData.success) {
+        setPaymentClientSecret(paymentData.clientSecret);
+        toast.success('Ready for payment. Please enter your card details.');
+      } else {
+        throw new Error(paymentData.error || 'Failed to initialize payment');
+      }
+    } catch (error) {
+      console.error('Payment initialization error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to initialize payment');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSubmitOrder = async () => {
+    if (formData.paymentMethod === 'stripe_checkout') {
+      await handleStripeCheckout();
+    } else if (formData.paymentMethod === 'card') {
+      await handleCardPayment();
+    } else {
+      // Bank transfer or COD
+      setIsLoading(true);
+      try {
+        await createOrder();
+        setCurrentStep('confirmation');
+        clearCart();
+        toast.success('Order submitted successfully!');
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to submit order');
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const handlePaymentSuccess = (paymentIntentId: string) => {
+    setCurrentStep('confirmation');
+    clearCart();
+    toast.success('Payment successful! Order confirmed.');
+  };
+
+  const handlePaymentError = (error: string) => {
+    toast.error(error);
   };
 
   const steps = [
@@ -509,7 +577,7 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
             )}
 
             {/* Step 3: Payment */}
-            {currentStep === 'payment' && (
+            {currentStep === 'payment' && !paymentClientSecret && (
               <div className="space-y-6">
                 <Card>
                   <CardHeader>
@@ -526,25 +594,63 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
                   </CardContent>
                 </Card>
 
-                {/* Card Payment Form */}
+                {/* Stripe Checkout Info */}
+                {formData.paymentMethod === 'stripe_checkout' && (
+                  <Card className="border-purple-200 bg-purple-50">
+                    <CardContent className="pt-6">
+                      <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 bg-[#635BFF] rounded-lg flex items-center justify-center">
+                          <svg viewBox="0 0 40 16" className="h-5">
+                            <text x="0" y="12" fill="white" fontSize="12" fontWeight="bold" fontFamily="Arial">stripe</text>
+                          </svg>
+                        </div>
+                        <div>
+                          <h4 className="font-semibold text-[#1E3A5F] mb-2">Stripe Checkout</h4>
+                          <p className="text-sm text-gray-600 mb-3">
+                            You&apos;ll be redirected to Stripe&apos;s secure checkout page where you can:
+                          </p>
+                          <ul className="text-sm space-y-1 text-gray-600">
+                            <li>• Pay with credit/debit card (Visa, Mastercard, Amex)</li>
+                            <li>• Use saved cards if you have a Stripe account</li>
+                            <li>• Pay with Apple Pay or Google Pay</li>
+                            <li>• Save your card for future purchases</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Card Payment Info */}
                 {formData.paymentMethod === 'card' && (
-                  <PaymentForm
-                    amount={formData.isPartialPayment ? depositAmount : finalTotal}
-                    customerEmail={formData.email}
-                    customerName={`${formData.firstName} ${formData.lastName}`}
-                    customerPhone={formData.phone}
-                    isPartialPayment={formData.isPartialPayment}
-                    totalAmount={finalTotal}
-                    onSuccess={(paymentIntentId) => {
-                      setPaymentClientSecret(paymentIntentId);
-                      setCurrentStep('confirmation');
-                      clearCart();
-                      toast.success('Payment successful! Order confirmed.');
-                    }}
-                    onError={(error) => {
-                      toast.error(error);
-                    }}
-                  />
+                  <Card className="border-green-200 bg-green-50">
+                    <CardContent className="pt-6">
+                      <div className="flex items-start gap-4">
+                        <CreditCard className="h-8 w-8 text-green-600" />
+                        <div>
+                          <h4 className="font-semibold text-[#1E3A5F] mb-2">Secure Card Payment</h4>
+                          <p className="text-sm text-gray-600">
+                            Enter your card details securely using Stripe Elements. 
+                            We accept Visa, Mastercard, American Express, and Discover.
+                          </p>
+                          <div className="flex gap-2 mt-3">
+                            <div className="w-10 h-6 bg-white rounded border flex items-center justify-center">
+                              <span className="text-xs font-bold text-blue-800">VISA</span>
+                            </div>
+                            <div className="w-10 h-6 bg-white rounded border flex items-center justify-center">
+                              <div className="flex">
+                                <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                                <div className="w-3 h-3 rounded-full bg-yellow-500 -ml-1"></div>
+                              </div>
+                            </div>
+                            <div className="w-10 h-6 bg-white rounded border flex items-center justify-center">
+                              <span className="text-xs font-bold text-blue-600">AMEX</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
                 )}
 
                 {/* Bank Transfer Info */}
@@ -651,6 +757,20 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
               </div>
             )}
 
+            {/* Stripe Elements Payment Form */}
+            {currentStep === 'payment' && paymentClientSecret && (
+              <StripePaymentForm
+                amount={depositAmountUSD}
+                amountGYD={depositAmount}
+                clientSecret={paymentClientSecret}
+                customerEmail={formData.email}
+                customerName={`${formData.firstName} ${formData.lastName}`}
+                onSuccess={handlePaymentSuccess}
+                onError={handlePaymentError}
+                onBack={() => setPaymentClientSecret(null)}
+              />
+            )}
+
             {/* Step 4: Confirmation */}
             {currentStep === 'confirmation' && (
               <Card>
@@ -677,9 +797,9 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
                         Please transfer the amount to:
                       </p>
                       <div className="mt-2 text-sm">
-                        <p><strong>Bank:</strong> [Your Bank Name]</p>
+                        <p><strong>Bank:</strong> Republic Bank Guyana</p>
                         <p><strong>Account:</strong> C2 ConcreteBlock Pro</p>
-                        <p><strong>Account #:</strong> [Account Number]</p>
+                        <p><strong>Account #:</strong> XXX-XXXX-XXXX</p>
                       </div>
                     </div>
                   )}
@@ -700,7 +820,7 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
             )}
 
             {/* Navigation Buttons */}
-            {currentStep !== 'confirmation' && (
+            {currentStep !== 'confirmation' && !paymentClientSecret && (
               <div className="flex justify-between mt-6">
                 <Button
                   variant="outline"
@@ -713,27 +833,33 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
                 </Button>
 
                 {currentStep === 'payment' ? (
-                  // Only show Place Order button for non-card payments
-                  // Card payments have their own Pay button in PaymentForm
-                  formData.paymentMethod !== 'card' && (
-                    <Button
-                      onClick={handleSubmitOrder}
-                      disabled={isLoading}
-                      className="bg-[#F97316] hover:bg-orange-600 flex items-center gap-2"
-                    >
-                      {isLoading ? (
-                        <>
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Processing...
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle className="h-4 w-4" />
-                          Place Order - ${formData.isPartialPayment ? depositAmount.toLocaleString() : finalTotal.toLocaleString()} GYD
-                        </>
-                      )}
-                    </Button>
-                  )
+                  <Button
+                    onClick={handleSubmitOrder}
+                    disabled={isLoading}
+                    className="bg-[#F97316] hover:bg-orange-600 flex items-center gap-2"
+                  >
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Processing...
+                      </>
+                    ) : formData.paymentMethod === 'stripe_checkout' ? (
+                      <>
+                        <ExternalLink className="h-4 w-4" />
+                        Proceed to Checkout - ${finalTotalUSD.toLocaleString()} USD
+                      </>
+                    ) : formData.paymentMethod === 'card' ? (
+                      <>
+                        <CreditCard className="h-4 w-4" />
+                        Enter Card Details
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="h-4 w-4" />
+                        Place Order - ${formData.isPartialPayment ? depositAmount.toLocaleString() : finalTotal.toLocaleString()} GYD
+                      </>
+                    )}
+                  </Button>
                 ) : (
                   <Button
                     onClick={handleNext}
@@ -771,8 +897,8 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
 
                 <div className="border-t pt-4 space-y-2">
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Subtotal</span>
-                    <span>${subtotal.toLocaleString()} GYD</span>
+                    <span className="text-gray-500">Subtotal (GYD)</span>
+                    <span>${subtotal.toLocaleString()}</span>
                   </div>
 
                   {formData.deliveryMethod === 'delivery' && formData.region !== 'region-3' && (
@@ -797,8 +923,13 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
                   )}
 
                   <div className="flex justify-between font-bold text-lg pt-2 border-t">
-                    <span>Total</span>
-                    <span className="text-[#F97316]">${finalTotal.toLocaleString()} GYD</span>
+                    <span>Total (GYD)</span>
+                    <span className="text-[#F97316]">${finalTotal.toLocaleString()}</span>
+                  </div>
+
+                  <div className="flex justify-between text-sm text-gray-500">
+                    <span>~USD Equivalent</span>
+                    <span>${finalTotalUSD.toLocaleString()} USD</span>
                   </div>
 
                   {formData.isPartialPayment && (
@@ -823,6 +954,14 @@ export function CheckoutFlow({ isOpen, onClose }: CheckoutProps) {
                     </p>
                   </div>
                 )}
+
+                {/* Security Badge */}
+                <div className="mt-4 pt-4 border-t">
+                  <div className="flex items-center justify-center gap-2 text-xs text-gray-500">
+                    <Lock className="h-3 w-3" />
+                    <span>Secure checkout powered by Stripe</span>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </div>
